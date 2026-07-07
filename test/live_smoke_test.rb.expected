@@ -1,0 +1,33 @@
+ping         PONG
+echo_utf8    héllo wörld
+set          OK
+get          value-1
+get_missing  true
+append       8
+strlen       8
+exists_yes   true
+exists_no    false
+incr         1
+incrby       42
+decr         41
+expire       true
+ttl_bounded  true
+llen         3
+lrange       zab
+lpop         z
+rpop         b
+sadd_1       1
+sadd_dup     0
+scard        2
+sismember_y  true
+sismember_n  false
+srem         1
+hset         1
+hgetall      2:v1:v2
+hget         v1
+hdel         1
+binary_rt    true
+err_wrongty  true
+publish_0    0
+del          1
+done

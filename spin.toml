@@ -1,0 +1,5 @@
+[package]
+name = "redis"
+version = "0.1.0"
+
+# published repos are conventionally named spinel-redis
