@@ -139,17 +139,20 @@ Deliberately not in this release, recorded rather than implied:
 
 ## Spinel notes
 
-Two compiler defects found while building this, both with minimal repros
-filed and workarounds in-tree:
+Three compiler defects were found while building this, filed with
+minimal repros, and **all three were fixed upstream the same day**
+(spinel a7e42e90):
 
 - [matz/spinel#1773](https://github.com/matz/spinel/issues/1773) — `&&`
-  evaluates a later operand's receiver before an earlier operand's side
-  effect. Workaround: sequential statements instead of
-  `x && obj.method == y` chains where the receiver depends on earlier
-  effects.
+  evaluated a later operand's receiver before an earlier operand's side
+  effect. Fixed (38923ee9).
 - [matz/spinel#1775](https://github.com/matz/spinel/issues/1775) —
-  `return <expr>` inside `begin` pops the rescue frame before evaluating
-  the expression. Workaround: assign, then return the local.
+  `return <expr>` inside `begin` popped the rescue frame before
+  evaluating. Fixed (5c56c94c).
+- [matz/spinel#1774](https://github.com/matz/spinel/issues/1774) — user
+  class named `Val` collided with a runtime typedef. Fixed (3e7173e9 —
+  user classes now get a distinct C stem).
 
-(Also [#1774](https://github.com/matz/spinel/issues/1774): don't name a
-class `Val`.)
+The in-tree code kept the workaround-era shapes (sequential statements,
+assign-then-return) — they're valid Ruby either way and keep the
+package compiling on pre-fix spinel builds.
