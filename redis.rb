@@ -7,11 +7,18 @@
 # TLS-only endpoints, RESP3).
 require "redis/resp"
 require "redis/client"
+require "redis/pubsub"
 require "redis/sock"
 require "redis/connection"
 
 class Redis < RedisClientCore
   def initialize(host = "127.0.0.1", port = 6379)
     super(RedisTransport.new(host, port))
+  end
+
+  # A subscribed connection is a dedicated connection (RESP2), so pubsub
+  # gets its own transport rather than sharing this client's.
+  def self.pubsub(host = "127.0.0.1", port = 6379)
+    RedisPubSub.new(RedisTransport.new(host, port))
   end
 end

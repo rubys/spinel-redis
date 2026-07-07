@@ -1,0 +1,12 @@
+subscribed   live:chan count=1
+publish_m1   receivers=1
+got_m1       live:chan
+got_binary   true
+unsubscribed live:chan count=0
+sub_leg_done count=0
+psubscribed  live:p:* count=1
+got_pmessage live:p:* live:p:alpha pm1
+punsubscribd live:p:* count=0
+psub_leg_done count=0
+publisher_ok PONG
+done

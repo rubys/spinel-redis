@@ -16,6 +16,23 @@ r.exists?("k")      # => true
 r.hgetall("h")      # => {"f" => "1", ...}
 ```
 
+Pub/sub mirrors redis-rb's block DSL. A subscribed connection is
+dedicated (RESP2), so pubsub gets its own; the loop blocks until the
+subscription count drains to zero, and handlers drive unsubscription:
+
+```ruby
+ps = Redis.pubsub("127.0.0.1", 6379)
+ps.subscribe("news") do |on|
+  on.subscribe   { |ch, count| }
+  on.message     { |ch, msg| ps.unsubscribe_all if msg == "quit" }
+  on.unsubscribe { |ch, count| }
+end
+# psubscribe / on.pmessage for patterns; subscribe_many for several channels
+```
+
+The blocking subscribe read parks scheduler-aware under `SP_THREADS`, so
+a subscribe loop in one fiber coexists with other work.
+
 No C, no FFI beyond the four `sp_net` externs the compiler links into
 every binary: protocol encode/decode is pure Ruby (compiled to native
 code by spinel), the same architecture as redis-rb's own default driver.
@@ -32,6 +49,7 @@ Three layers, each testable one level down:
 |---|---|---|
 | `redis/resp.rb` | RESP2 encoding (pure functions) + incremental reply parser | dual-runtime: same test runs compiled and under CRuby |
 | `redis/client.rb` | typed per-command methods over an injected transport duck | dual-runtime, against a scripted transport |
+| `redis/pubsub.rb` | SUBSCRIBE-mode dispatch loop + block-DSL listener | dual-runtime (scripted) + compiled-only live test |
 | `redis/sock.rb` + `redis/connection.rb` | the real `sp_net` transport | compiled-only live test against a real redis-server (committed snapshot) |
 
 The parser is a `try_next`/`reply` state machine rather than a
@@ -57,11 +75,11 @@ on port 16391 (no persistence, shut down after) and carries a committed
 
 Deliberately not in this release, recorded rather than implied:
 
-- **SUBSCRIBE / pub-sub consume mode** — next milestone (publish side
-  works). The subscribe loop is the integration point with the scheduler
-  and is being built against its first consumer.
 - **RESP3** — RESP2 only; no client-side caching push. A dedicated
   connection per subscriber is the model, as in redis-rb's default.
+- **Non-blocking subscribe drain** — the subscribe loop is blocking
+  (scheduler-parked); poll-loop embedders that need "dispatch only
+  what's buffered" get that hook when the tep integration lands.
 - **TLS** — `sp_net` has no TLS yet (matz/spinel#1054); TLS-only managed
   Redis endpoints (ElastiCache in-transit encryption etc.) need a local
   stunnel/nginx hop for now.
