@@ -100,17 +100,6 @@ class RedisClientCore
     opt_reply(["GET", key])
   end
 
-  # redis-rb's hash-style sugar (examples/basic.rb): r["k"] = "v" / r["k"].
-  # .to_s keeps the wire argv a typed Array<String> (String#to_s is
-  # identity, so binary values pass through untouched).
-  def [](key)
-    get(key.to_s)
-  end
-
-  def []=(key, value)
-    set(key.to_s, value.to_s)
-  end
-
   def del(key)
     int_reply(["DEL", key])
   end

@@ -33,7 +33,11 @@ redis.subscribe_many(["one", "two"]) do |on|
       driver.publish("two", "exit")
     end
     if message == "exit"
-      redis.unsubscribe_all
+      # explicit per-channel unsubscribes in fixed order: the no-arg form's
+      # confirmation order is server-internal and varies run to run (the
+      # oracle harness caught the flake)
+      redis.unsubscribe("one")
+      redis.unsubscribe("two")
     end
   end
 

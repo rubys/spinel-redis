@@ -68,7 +68,11 @@ calls are already fiber-friendly.
 the ported behavior:
 
 - `basic.rb`, `incr-decr.rb`, `list.rb`, `sets.rb` — verbatim flows
-  (these forced `[]`/`[]=`, `ltrim`, `sinter` into the client surface).
+  (these forced `ltrim` and `sinter` into the client surface). One
+  correction to upstream: `basic.rb`'s `r['foo'] = 'bar'` sugar was
+  removed from redis-rb in 5.0 — as written upstream it falls through
+  `method_missing` and sends a literal `[]=` command to the server. The
+  oracle harness caught this; the port (and this client) uses set/get.
 - `pubsub.rb` — reshaped from interactive (redis-cli in a second
   terminal) to self-driving: a second connection publishes from inside
   the subscriber's callbacks. `trap(:INT)` and the rescue/retry
@@ -83,11 +87,22 @@ the ported behavior:
 
 ```sh
 spin test          # resp + client + pubsub lanes also run under CRuby and must match
+sh oracle/run.sh   # replay every snapshot flow through the REAL redis-rb gem
 ```
 
-The live lane (`test/live_smoke_test.rb`) starts its own `redis-server`
-on port 16391 (no persistence, shut down after) and carries a committed
-`.expected`; it needs `redis-server`/`redis-cli` on PATH.
+The live lanes start their own `redis-server` on private ports (no
+persistence, shut down after) and carry committed `.expected` snapshots;
+they need `redis-server`/`redis-cli` on PATH.
+
+`oracle/run.sh` is the second conformance axis: each `oracle/*.rb` is a
+twin of a snapshot-gated flow, run under CRuby against the *real*
+redis-rb gem (no `-I`, so `require "redis"` resolves to the gem), and
+its output is diffed against the same committed snapshots the compiled
+client froze. Zero hand-authored expectations; a diff on either side is
+a contract divergence. Snapshot-determinism rules the oracle enforced:
+set replies are sorted, and unsubscribes are explicit per-channel (the
+no-arg form's confirmation order is server-internal and flaps between
+runs).
 
 ## v0.1 exclusion ledger
 
