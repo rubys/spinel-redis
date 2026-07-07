@@ -132,6 +132,11 @@ class RedisClientCore
     int_reply(["STRLEN", key.to_s])
   end
 
+  # SET with TTL in one round trip (Mastodon streaming's presence keys).
+  def setex(key, seconds, value)
+    str_reply(["SETEX", key.to_s, seconds.to_s, value.to_s])
+  end
+
   def expire(key, seconds)
     bool_reply(["EXPIRE", key.to_s, seconds.to_s])
   end

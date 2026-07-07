@@ -64,6 +64,13 @@ w = t.written
 puts "incr_values  " + (a == 6 && b == 16).to_s
 puts "incrby_wire  " + w.include?("$6\r\nINCRBY\r\n$1\r\nn\r\n$2\r\n10\r\n").to_s
 
+# SETEX wire shape
+t = ScriptedTransport.new(["+OK\r\n"])
+c = RedisClientCore.new(t)
+ok = c.setex("pres", 60, "1") == "OK"
+w = t.written
+puts "setex        " + (ok && w.include?("$5\r\nSETEX\r\n$4\r\npres\r\n$2\r\n60\r\n$1\r\n1\r\n")).to_s
+
 # EXISTS -> bool via :1/:0
 t = ScriptedTransport.new([":1\r\n", ":0\r\n"])
 c = RedisClientCore.new(t)
