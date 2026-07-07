@@ -187,3 +187,36 @@ rescue => e
   raised = e.message.include?("connection lost")
 end
 puts "lost_raises  " + raised.to_s
+
+# --- drain surface: subscribe_start + drain against scripted chunks --------
+
+conf_bytes = conf("subscribe", "d", 1)
+half = conf_bytes.byteslice(0, 5)
+rest = conf_bytes.byteslice(5, conf_bytes.bytesize - 5)
+script = [
+  half,                                   # drain 1: partial confirmation
+  rest + msg("d", "m1"),                  # drain 2: completes conf + one msg
+  msg("d", "m2") + conf("unsubscribe", "d", 0)   # drain 3: msg + unsub
+]
+t = ScriptedTransport.new(script)
+ps = RedisPubSub.new(t)
+devents = []
+dl = RedisListener.new
+dl.subscribe do |ch, n|
+  devents.push("sub:" + ch)
+end
+dl.message do |ch, m|
+  devents.push("msg:" + m)
+end
+dl.unsubscribe do |ch, n|
+  devents.push("unsub:" + n.to_s)
+end
+ps.subscribe_start("d")
+w = t.written
+puts "start_wire   " + w.include?("*2\r\n$9\r\nSUBSCRIBE\r\n$1\r\nd\r\n").to_s
+n1 = ps.drain(dl)
+n2 = ps.drain(dl)
+n3 = ps.drain(dl)
+puts "drain_counts " + n1.to_s + n2.to_s + n3.to_s
+puts "drain_events " + devents.join(",")
+puts "drain_count0 " + (ps.subscription_count == 0).to_s

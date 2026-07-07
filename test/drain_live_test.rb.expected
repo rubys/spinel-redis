@@ -1,0 +1,7 @@
+fd_valid     true
+quiet_fd     true
+after_start  sub:drain:chan:1
+after_pub    sub:drain:chan:1,msg:drain:chan:d1,msg:drain:chan:d2
+after_unsub  sub:drain:chan:1,msg:drain:chan:d1,msg:drain:chan:d2,unsub:drain:chan:0
+count_zero   true
+done

@@ -33,6 +33,20 @@ end
 The blocking subscribe read parks scheduler-aware under `SP_THREADS`, so
 a subscribe loop in one fiber coexists with other work.
 
+Embedders with their own event loop skip the blocking loop entirely:
+`subscribe_start` sends the command, `fd` exposes the socket, and
+`drain(listener)` does one read plus dispatch of every complete push —
+park on the fd however you like between drains. This is the surface
+`Tep::RedisFeed` (roundhouse) rides to feed tep's in-process broadcast
+registry from cross-process Redis pub/sub:
+
+```ruby
+l = RedisListener.new
+l.message { |ch, msg| Broadcast.publish(ch, msg) }
+ps.subscribe_start("timeline:1")
+loop { ps.drain(l) if fd_readable?(ps.fd) }   # io_wait / poll between
+```
+
 No C, no FFI beyond the four `sp_net` externs the compiler links into
 every binary: protocol encode/decode is pure Ruby (compiled to native
 code by spinel), the same architecture as redis-rb's own default driver.
@@ -110,9 +124,6 @@ Deliberately not in this release, recorded rather than implied:
 
 - **RESP3** — RESP2 only; no client-side caching push. A dedicated
   connection per subscriber is the model, as in redis-rb's default.
-- **Non-blocking subscribe drain** — the subscribe loop is blocking
-  (scheduler-parked); poll-loop embedders that need "dispatch only
-  what's buffered" get that hook when the tep integration lands.
 - **TLS** — `sp_net` has no TLS yet (matz/spinel#1054); TLS-only managed
   Redis endpoints (ElastiCache in-transit encryption etc.) need a local
   stunnel/nginx hop for now.

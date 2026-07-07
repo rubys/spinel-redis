@@ -13,6 +13,12 @@ class RedisTransport
     end
   end
 
+  # The raw socket fd — embedders with their own event loop park on
+  # this (poll / Tep::Scheduler.io_wait) and then drain.
+  def fd
+    @fd
+  end
+
   def write(data)
     RedisSock.sp_net_write_bytes(@fd, data, data.bytesize)
   end

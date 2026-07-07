@@ -123,6 +123,51 @@ class RedisPubSub
     run(listener)
   end
 
+  # -- event-loop embedding surface -------------------------------------
+  #
+  # The blocking subscribe() above owns the read loop. Embedders with
+  # their own loop (a poll round, Tep::Scheduler.io_wait) instead:
+  #
+  #   l = RedisListener.new
+  #   l.message { |ch, m| ... }
+  #   ps.subscribe_start("chan")
+  #   loop: wait until ps.fd is readable, then ps.drain(l)
+  #
+  # drain() performs ONE transport read (prompt when the caller waited
+  # for readability) and dispatches every complete reply buffered.
+
+  # The subscribed connection's socket fd (requires a transport that
+  # exposes fd, as RedisTransport does).
+  def fd
+    @t.fd
+  end
+
+  # Send (P)SUBSCRIBE without entering a read loop.
+  def subscribe_start(channel)
+    @t.write(Resp.encode_command(["SUBSCRIBE", channel.to_s]))
+  end
+
+  def psubscribe_start(pattern)
+    @t.write(Resp.encode_command(["PSUBSCRIBE", pattern.to_s]))
+  end
+
+  # One read + dispatch of everything complete. Returns the number of
+  # replies dispatched (0 = a partial reply is still assembling).
+  # Raises when the connection is gone, same as the blocking loop.
+  def drain(listener)
+    chunk = @t.read_some(65536)
+    if chunk.bytesize == 0
+      raise "redis: connection lost (subscribe mode)"
+    end
+    @parser.feed(chunk)
+    n = 0
+    while @parser.try_next
+      dispatch(@parser.reply, listener)
+      n = n + 1
+    end
+    n
+  end
+
   # Callable from inside handler blocks: the commands go out on the same
   # connection; the confirmations come back through the running loop.
   def unsubscribe(channel)
