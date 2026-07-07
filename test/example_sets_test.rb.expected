@@ -1,0 +1,13 @@
+
+"create a set of tags on foo-tags"
+
+"create a set of tags on bar-tags"
+
+"foo-tags"
+["one", "three", "two"]
+
+"bar-tags"
+["five", "four", "three"]
+
+"intersection of foo-tags and bar-tags"
+["three"]

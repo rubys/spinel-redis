@@ -1,0 +1,8 @@
+
+"pushing log messages into a LIST"
+
+"contents of logs LIST"
+["some log message", "another log message", "yet another log message", "also another log message"]
+
+"Trim logs LIST to last 2 elements(easy circular buffer)"
+["yet another log message", "also another log message"]

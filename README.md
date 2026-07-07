@@ -61,10 +61,28 @@ layer — there is deliberately no public `call(*args)` funnel.
 `sp_net` recv parks scheduler-aware under `SP_THREADS`, so blocking-style
 calls are already fiber-friendly.
 
+## Examples
+
+`examples/` ports redis-rb v5.4.1's examples; each has a gated copy in
+`test/` running against a test-owned server, so `spin publish` gates on
+the ported behavior:
+
+- `basic.rb`, `incr-decr.rb`, `list.rb`, `sets.rb` — verbatim flows
+  (these forced `[]`/`[]=`, `ltrim`, `sinter` into the client surface).
+- `pubsub.rb` — reshaped from interactive (redis-cli in a second
+  terminal) to self-driving: a second connection publishes from inside
+  the subscriber's callbacks. `trap(:INT)` and the rescue/retry
+  reconnect wrapper are not ported (ledger).
+- `prefork.rb` — the `unicorn/` example's lesson translated to
+  `sp_net_fork` discipline: close before fork, connect per worker after.
+- Not ported: `dist_redis.rb` / `sentinel*` (v0.1 exclusions below) and
+  `consistency.rb` (a random-driven soak tool; the API it exercises is
+  covered by the lanes above).
+
 ## Tests
 
 ```sh
-spin test          # resp + client lanes also run under CRuby and must match
+spin test          # resp + client + pubsub lanes also run under CRuby and must match
 ```
 
 The live lane (`test/live_smoke_test.rb`) starts its own `redis-server`

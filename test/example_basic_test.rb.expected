@@ -1,0 +1,5 @@
+
+"set foo to \"bar\""
+
+"value of foo"
+"bar"

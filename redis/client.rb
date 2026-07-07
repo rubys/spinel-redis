@@ -100,6 +100,17 @@ class RedisClientCore
     opt_reply(["GET", key])
   end
 
+  # redis-rb's hash-style sugar (examples/basic.rb): r["k"] = "v" / r["k"].
+  # .to_s keeps the wire argv a typed Array<String> (String#to_s is
+  # identity, so binary values pass through untouched).
+  def [](key)
+    get(key.to_s)
+  end
+
+  def []=(key, value)
+    set(key.to_s, value.to_s)
+  end
+
   def del(key)
     int_reply(["DEL", key])
   end
@@ -170,6 +181,10 @@ class RedisClientCore
     strings_reply(["LRANGE", key, start.to_s, stop.to_s])
   end
 
+  def ltrim(key, start, stop)
+    str_reply(["LTRIM", key, start.to_s, stop.to_s])
+  end
+
   # -- sets ----------------------------------------------------------------
 
   def sadd(key, member)
@@ -190,6 +205,12 @@ class RedisClientCore
 
   def scard(key)
     int_reply(["SCARD", key])
+  end
+
+  # Two-key intersection (examples/sets.rb); redis-rb's splat form is
+  # narrowed to a typed arity.
+  def sinter(key, other)
+    strings_reply(["SINTER", key, other])
   end
 
   # -- hashes ----------------------------------------------------------------

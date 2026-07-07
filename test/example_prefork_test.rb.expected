@@ -1,0 +1,4 @@
+"counter after 3 workers"
+"3"
+"workers that reported in"
+["worker-0", "worker-1", "worker-2"]
