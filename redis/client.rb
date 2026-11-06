@@ -253,6 +253,7 @@ class RedisClientCore
 
   # HSET key field value, or HSET key with every pair of a Hash, as
   # redis-rb's hset(key, field, value) and hset(key, hash) both write it.
+  # A field with no value goes out short, for the server to refuse.
   def self.hset_argv(key, field, value)
     argv = ["HSET", key.to_s]
     if field.is_a?(Hash)
@@ -262,7 +263,9 @@ class RedisClientCore
       end
     else
       argv.push(field.to_s)
-      argv.push(value.to_s)
+      if !value.nil?
+        argv.push(value.to_s)
+      end
     end
     argv
   end
@@ -522,7 +525,7 @@ class RedisClientCore
 
   # hset(key, field, value), or hset(key, hash) for several fields in
   # one command; how many fields were new.
-  def hset(key, field, value = "")
+  def hset(key, field, value = nil)
     int_reply(RedisClientCore.hset_argv(key, field, value))
   end
 

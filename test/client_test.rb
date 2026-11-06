@@ -609,6 +609,18 @@ a = c.hset("h", {"a" => "1", "b" => 2})
 b = c.hset("h", "a", "1")
 puts "hset_hash    " + (a == 2 && b == 0 && t.written == "*6\r\n$4\r\nHSET\r\n$1\r\nh\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n*4\r\n$4\r\nHSET\r\n$1\r\nh\r\n$1\r\na\r\n$1\r\n1\r\n").to_s
 
+# a field with no value goes out short for the server to refuse, as
+# redis-rb sends it; it doesn't store an empty value
+t = ScriptedTransport.new(["-ERR wrong number of arguments for 'hset' command\r\n"])
+c = RedisClientCore.new(t)
+msg = "none"
+begin
+  c.hset("h", "f")
+rescue Redis::CommandError => e
+  msg = e.message
+end
+puts "hset_short   " + (msg.start_with?("redis: ERR wrong number") && t.written == "*3\r\n$4\r\nHSET\r\n$1\r\nh\r\n$1\r\nf\r\n").to_s
+
 # variadic LPUSH and SADD
 t = ScriptedTransport.new([":2\r\n", ":3\r\n"])
 c = RedisClientCore.new(t)

@@ -82,7 +82,7 @@ class RedisPipeline
     queue(RedisClientCore.push_argv("SADD", key, member), INT)
   end
 
-  def hset(key, field, value = "")
+  def hset(key, field, value = nil)
     queue(RedisClientCore.hset_argv(key, field, value), INT)
   end
 

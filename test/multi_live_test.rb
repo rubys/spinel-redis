@@ -133,6 +133,12 @@ puts "set_nx       " + r.set("n", "1", nx: true).to_s + " " + r.set("n", "2", nx
 puts "set_ex       " + r.set("e", "1", ex: 100).to_s + " " + (r.ttl("e") > 90).to_s
 puts "unlink       " + r.unlink(["n", "e", "missing"]).to_s + " " + r.unlink("n").to_s
 puts "hset_hash    " + r.hset("hh", {"a" => "1", "b" => "2"}).to_s + " " + r.hset("hh", {"a" => "3", "c" => "4"}).to_s + " " + r.hget("hh", "a").to_s
+begin
+  r.hset("hs", "f")
+  puts "hset_short   none?!"
+rescue Redis::CommandError => e
+  puts "hset_short   " + e.message.include?("wrong number of arguments").to_s + " " + r.exists("hs").to_s
+end
 puts "lpush_many   " + r.lpush("lp", ["1", "2"]).to_s + " " + r.lrange("lp", 0, -1).join(",")
 puts "sadd_many    " + r.sadd("sm", ["a", "b", "a"]).to_s
 
