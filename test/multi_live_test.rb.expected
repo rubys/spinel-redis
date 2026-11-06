@@ -1,0 +1,29 @@
+dead_1       3 true 0 0
+dead_2       true 1 0
+dead_set     job-1,job-2
+beat_1       1 0 6 true true
+beat_2       0 1 0 true TSTP
+beat_fields  1 51200 60
+work         1 1 1 true
+work_keys    t1,t2
+tx_mixed     true false OK 3
+lock         a true
+pushed       z,y,x
+exec_error   true
+exec_ran     1 1
+exec_insync  PONG
+queue_error  true false
+queue_ran    0
+queue_insync PONG
+empty        0
+set_nx       true false 1
+set_ex       OK true
+unlink       2 0
+hset_hash    2 1 3
+hset_short   true 0
+lpush_many   2 2,1
+sadd_many    2
+sscan_all    300
+sscan_match  10
+sscan_none   0
+done

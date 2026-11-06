@@ -98,9 +98,30 @@ r.pipelined do |p|
 end                                # => [1, 1]
 ```
 
-The block's recorder has `set`, `del`, `incrby`, `expire`, `lpush`,
-`rpush`, `sadd`, `hset`, `zadd`, `zremrangebyscore` and
-`zremrangebyrank`. A pipeline is not a transaction.
+The block's recorder has `set` (with `ex:` and `nx:`), `del`, `unlink`,
+`exists`, `incrby`, `expire`, `lpush`, `rpush`, `rpop`, `sadd`, `hset`,
+`zadd`, `zremrangebyscore` and `zremrangebyrank`. A pipeline is not a
+transaction.
+
+`multi` takes the same block and recorder, and wraps the commands in
+`MULTI` ... `EXEC`, still in one write, so the server runs them as one
+transaction. This is how Sidekiq writes a job to its dead set:
+
+```ruby
+r.multi do |tx|
+  tx.zadd("dead", now, job)
+  tx.zremrangebyscore("dead", "-inf", now - 15552000)
+  tx.zremrangebyrank("dead", 0, -10000)
+end                                # => [true, 0, 0]
+```
+
+Errors are raised the way redis-rb raises them. If the server refuses
+to queue a command (an unknown command or a wrong argument count),
+nothing runs and that refusal is raised, not `EXECABORT`. If a command
+fails while `EXEC` runs (`WRONGTYPE`), the others still ran, as Redis
+does it, and the first error is raised once every reply is read.
+Either way the connection stays in step. An empty block sends nothing
+and returns `[]`.
 
 Pub/sub mirrors redis-rb's block DSL. A subscribed connection is
 dedicated (RESP2), so pubsub gets its own; the loop blocks until the
@@ -219,13 +240,22 @@ Deliberately not in this release, recorded rather than implied:
 - **Sentinel / Cluster / `dist_redis`** — single connection to a single
   server. Mastodon supports Sentinel via env, so this is a future ledger
   entry, not a never.
-- **SCAN family, transactions, unix sockets** —
+- **Unix sockets, `WATCH`, and the SCAN family beyond `sscan_each`** —
   straightforward additions when a consumer needs them. `unix://` URLs
-  raise an `ArgumentError`.
+  raise an `ArgumentError`. `multi` has no `WATCH`/`UNWATCH`/`DISCARD`,
+  and its block is the recorder, so a command can't be sent outside
+  the transaction from inside it.
+- `sscan_each` takes a block, with `match:` and `count:`; redis-rb's
+  Enumerator form (no block) and `sscan`, `scan`, `hscan` and `zscan`
+  aren't mirrored.
 - Variadic command forms are narrowed to typed arities (`del(key)`,
-  `sadd(key, member)`, `zadd(key, score, member)`, `lpush(key, value)`);
-  `rpush` takes one value or an Array, as redis-rb's does; `sadd` returns the
-  Integer added-count, redis-rb's legacy Boolean mode is not mirrored.
+  `zadd(key, score, member)`). `lpush`, `rpush` and `sadd` take one
+  value or an Array, and `unlink` one key or an Array, as redis-rb's
+  do; `sadd` returns the Integer added-count, redis-rb's legacy Boolean
+  mode is not mirrored. `hset` takes a field and value or a Hash of
+  them, not redis-rb's flat `hset(key, f1, v1, f2, v2)` splat. `set`
+  takes `ex:` and `nx:` (and answers true or false with `nx:`, as
+  redis-rb does); `px:`, `xx:`, `keepttl:` and `get:` aren't mirrored.
   `zadd` and `zrem` take one member and return a Boolean, as redis-rb's
   single-member forms do. `zadd`'s `nx:`/`xx:`/`incr:` options and
   `zrange`'s `with_scores:` are not mirrored; `zscore` reads one score.
@@ -248,9 +278,10 @@ Deliberately not in this release, recorded rather than implied:
   keywords. A script's reply must be a bulk string or nil; an Integer
   or Array reply raises `Redis::BaseError` instead. `eval` and
   the other `SCRIPT` subcommands aren't mirrored.
-- `pipelined` takes no `exception: false`, and its recorder has only the
-  commands listed above. Its return value holds the coerced replies, as
-  redis-rb's does, with an error reply's message in its place.
+- `pipelined` and `multi` take no `exception: false`, and their recorder
+  has only the commands listed above. Their return values hold the
+  coerced replies, as redis-rb's do, with an error reply's message in
+  its place.
 
 ## Spinel notes
 

@@ -18,6 +18,8 @@ class RedisPipeline
   INT = 0
   BOOL = 1
   STR = 2
+  OPT = 3      # a String, or nil for a nil reply (RPOP of an empty list)
+  SET_NX = 4   # SET ... NX: true when it set the key
 
   def initialize
     @argvs = [["PING"]]
@@ -40,12 +42,20 @@ class RedisPipeline
     nil
   end
 
-  def set(key, value)
-    queue(["SET", key.to_s, value.to_s], STR)
+  def set(key, value, ex: 0, nx: false)
+    queue(RedisClientCore.set_argv(key, value, ex, nx), nx ? SET_NX : STR)
   end
 
   def del(key)
     queue(["DEL", key.to_s], INT)
+  end
+
+  def unlink(keys)
+    queue(RedisClientCore.keys_argv("UNLINK", keys), INT)
+  end
+
+  def exists(key)
+    queue(["EXISTS", key.to_s], INT)
   end
 
   def incrby(key, n)
@@ -57,19 +67,23 @@ class RedisPipeline
   end
 
   def lpush(key, value)
-    queue(["LPUSH", key.to_s, value.to_s], INT)
+    queue(RedisClientCore.push_argv("LPUSH", key, value), INT)
   end
 
   def rpush(key, value)
     queue(RedisClientCore.push_argv("RPUSH", key, value), INT)
   end
 
-  def sadd(key, member)
-    queue(["SADD", key.to_s, member.to_s], INT)
+  def rpop(key)
+    queue(["RPOP", key.to_s], OPT)
   end
 
-  def hset(key, field, value)
-    queue(["HSET", key.to_s, field.to_s, value.to_s], INT)
+  def sadd(key, member)
+    queue(RedisClientCore.push_argv("SADD", key, member), INT)
+  end
+
+  def hset(key, field, value = nil)
+    queue(RedisClientCore.hset_argv(key, field, value), INT)
   end
 
   def zadd(key, score, member)

@@ -484,3 +484,163 @@ kinds = []
 end
 puts "evalsha_kind " + kinds.join(",")
 puts "after_kind   " + (c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"]) == "job-a").to_s
+
+# -- multi ----------------------------------------------------------------------
+
+# Sidekiq's dead-set write: MULTI, the three commands and EXEC go out in
+# one write; the replies are MULTI's +OK, a +QUEUED each, then EXEC's
+# Array, coerced as the client coerces them
+t = ScriptedTransport.new(["+OK\r\n+QUEUED\r\n+QUEUED\r\n", "+QUEUED\r\n*3\r\n:1\r\n:0\r\n:2\r\n"])
+c = RedisClientCore.new(t)
+res = c.multi do |tx|
+  tx.zadd("dead", 1.5, "j")
+  tx.zremrangebyscore("dead", "-inf", 0)
+  tx.zremrangebyrank("dead", 0, -10000)
+end
+w = t.written
+puts "multi_wire   " + (w == "*1\r\n$5\r\nMULTI\r\n*4\r\n$4\r\nZADD\r\n$4\r\ndead\r\n$3\r\n1.5\r\n$1\r\nj\r\n*4\r\n$16\r\nZREMRANGEBYSCORE\r\n$4\r\ndead\r\n$4\r\n-inf\r\n$1\r\n0\r\n*4\r\n$15\r\nZREMRANGEBYRANK\r\n$4\r\ndead\r\n$1\r\n0\r\n$6\r\n-10000\r\n*1\r\n$4\r\nEXEC\r\n").to_s
+puts "multi_values " + (res.length == 3 && res[0] == true && res[1] == 0 && res[2] == 2).to_s
+
+# the heartbeat's shape: variadic SADD, EXISTS, multi-field HSET, EXPIRE
+# and an RPOP that answers nil
+t = ScriptedTransport.new(["+OK\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n*5\r\n:1\r\n:0\r\n:2\r\n:1\r\n$-1\r\n"])
+c = RedisClientCore.new(t)
+res = c.multi do |tx|
+  tx.sadd("processes", ["host:1:abc"])
+  tx.exists("host:1:abc")
+  tx.hset("host:1:abc", {"busy" => 0, "beat" => 1.5})
+  tx.expire("host:1:abc", 60)
+  tx.rpop("host:1:abc-signals")
+end
+puts "beat_wire    " + t.written.include?("*6\r\n$4\r\nHSET\r\n$10\r\nhost:1:abc\r\n$4\r\nbusy\r\n$1\r\n0\r\n$4\r\nbeat\r\n$3\r\n1.5\r\n").to_s
+puts "beat_values  " + (res[0] == 1 && res[1] == 0 && res[2] == 2 && res[3] == true && res[4].nil?).to_s
+
+# SET NX inside a transaction: true when set, false on a nil reply;
+# UNLINK and variadic LPUSH answer Integers
+t = ScriptedTransport.new(["+OK\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n*4\r\n:2\r\n+OK\r\n$-1\r\n:2\r\n"])
+c = RedisClientCore.new(t)
+res = c.multi do |tx|
+  tx.unlink(["a", "b"])
+  tx.set("lock", "1", nx: true, ex: 10)
+  tx.set("lock", "2", nx: true)
+  tx.lpush("l", ["x", "y"])
+end
+w = t.written
+puts "tx_wire      " + (w.include?("*3\r\n$6\r\nUNLINK\r\n$1\r\na\r\n$1\r\nb\r\n") && w.include?("*6\r\n$3\r\nSET\r\n$4\r\nlock\r\n$1\r\n1\r\n$2\r\nEX\r\n$2\r\n10\r\n$2\r\nNX\r\n") && w.include?("*4\r\n$5\r\nLPUSH\r\n$1\r\nl\r\n$1\r\nx\r\n$1\r\ny\r\n")).to_s
+puts "tx_values    " + (res[0] == 2 && res[1] == true && res[2] == false && res[3] == 2).to_s
+
+# an empty block sends nothing
+t = ScriptedTransport.new([])
+c = RedisClientCore.new(t)
+res = c.multi do |tx|
+end
+puts "multi_empty  " + (res.length == 0 && t.written == "").to_s
+
+# a command failing while EXEC runs doesn't stop the rest; the first
+# error is raised after EXEC's whole reply is read
+t = ScriptedTransport.new(["+OK\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n*3\r\n+OK\r\n-WRONGTYPE Operation against a key holding the wrong kind of value\r\n+OK\r\n", "+PONG\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.multi do |tx|
+    tx.set("s", "x")
+    tx.lpush("s", "y")
+    tx.set("after", "1")
+  end
+rescue Redis::WrongTypeError
+  kind = "wrongtype"
+end
+puts "exec_error   " + kind
+puts "exec_insync  " + c.ping
+
+# a command the server won't queue aborts the transaction: that refusal
+# is raised (not EXECABORT), after EXEC's reply is read
+t = ScriptedTransport.new(["+OK\r\n+QUEUED\r\n-ERR wrong number of arguments for 'hset' command\r\n-EXECABORT Transaction discarded because of previous errors.\r\n", "+PONG\r\n"])
+c = RedisClientCore.new(t)
+msg = "none"
+begin
+  c.multi do |tx|
+    tx.set("q", "1")
+    tx.hset("h", {})
+  end
+rescue Redis::CommandError => e
+  msg = e.message
+end
+puts "queue_error  " + msg.start_with?("redis: ERR wrong number").to_s
+puts "queue_insync " + c.ping
+
+# the connection lost before EXEC answers is a ConnectionError
+t = ScriptedTransport.new(["+OK\r\n+QUEUED\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.multi do |tx|
+    tx.set("q", "1")
+  end
+rescue Redis::ConnectionError
+  kind = "connection"
+end
+puts "multi_lost   " + kind
+
+# -- Phase 5 commands outside a transaction --------------------------------------
+
+# SET with ex: and nx:
+t = ScriptedTransport.new(["+OK\r\n", "+OK\r\n", "$-1\r\n", "+OK\r\n"])
+c = RedisClientCore.new(t)
+a = c.set("k", "v", ex: 5)
+puts "set_ex       " + (a == "OK" && t.written == "*5\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n$2\r\nEX\r\n$1\r\n5\r\n").to_s
+b = c.set("n", "1", nx: true)
+d = c.set("n", "1", nx: true)
+puts "set_nx       " + (b == true && d == false).to_s
+puts "set_plain    " + (c.set("k", "v") == "OK").to_s
+
+# UNLINK one key or several; EXISTS as an Integer
+t = ScriptedTransport.new([":1\r\n", ":2\r\n", ":0\r\n"])
+c = RedisClientCore.new(t)
+a = c.unlink("a")
+b = c.unlink(["a", "b"])
+puts "unlink       " + (a == 1 && b == 2 && t.written == "*2\r\n$6\r\nUNLINK\r\n$1\r\na\r\n*3\r\n$6\r\nUNLINK\r\n$1\r\na\r\n$1\r\nb\r\n").to_s
+puts "exists_int   " + (c.exists("a") == 0).to_s
+
+# multi-field HSET from a Hash; the three-argument form unchanged
+t = ScriptedTransport.new([":2\r\n", ":0\r\n"])
+c = RedisClientCore.new(t)
+a = c.hset("h", {"a" => "1", "b" => 2})
+b = c.hset("h", "a", "1")
+puts "hset_hash    " + (a == 2 && b == 0 && t.written == "*6\r\n$4\r\nHSET\r\n$1\r\nh\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n*4\r\n$4\r\nHSET\r\n$1\r\nh\r\n$1\r\na\r\n$1\r\n1\r\n").to_s
+
+# a field with no value goes out short for the server to refuse, as
+# redis-rb sends it; it doesn't store an empty value
+t = ScriptedTransport.new(["-ERR wrong number of arguments for 'hset' command\r\n"])
+c = RedisClientCore.new(t)
+msg = "none"
+begin
+  c.hset("h", "f")
+rescue Redis::CommandError => e
+  msg = e.message
+end
+puts "hset_short   " + (msg.start_with?("redis: ERR wrong number") && t.written == "*3\r\n$4\r\nHSET\r\n$1\r\nh\r\n$1\r\nf\r\n").to_s
+
+# variadic LPUSH and SADD
+t = ScriptedTransport.new([":2\r\n", ":3\r\n"])
+c = RedisClientCore.new(t)
+a = c.lpush("l", ["x", "y"])
+b = c.sadd("s", ["a", "b", "c"])
+puts "variadic     " + (a == 2 && b == 3 && t.written == "*4\r\n$5\r\nLPUSH\r\n$1\r\nl\r\n$1\r\nx\r\n$1\r\ny\r\n*5\r\n$4\r\nSADD\r\n$1\r\ns\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n").to_s
+
+# SSCAN walks the cursor until 0, yielding each member, with MATCH and
+# COUNT passed through
+t = ScriptedTransport.new(["*2\r\n$2\r\n17\r\n*2\r\n$1\r\na\r\n$1\r\nb\r\n", "*2\r\n$1\r\n0\r\n*1\r\n$1\r\nc\r\n"])
+c = RedisClientCore.new(t)
+got = []
+c.sscan_each("s", match: "*", count: 2) do |m|
+  got.push(m)
+end
+puts "sscan_each   " + (got.join(",") == "a,b,c" && t.written == "*7\r\n$5\r\nSSCAN\r\n$1\r\ns\r\n$1\r\n0\r\n$5\r\nMATCH\r\n$1\r\n*\r\n$5\r\nCOUNT\r\n$1\r\n2\r\n*7\r\n$5\r\nSSCAN\r\n$1\r\ns\r\n$2\r\n17\r\n$5\r\nMATCH\r\n$1\r\n*\r\n$5\r\nCOUNT\r\n$1\r\n2\r\n").to_s
+t = ScriptedTransport.new(["*2\r\n$1\r\n0\r\n*0\r\n"])
+c = RedisClientCore.new(t)
+n = 0
+c.sscan_each("empty") do |m|
+  n = n + 1
+end
+puts "sscan_empty  " + (n == 0 && t.written == "*3\r\n$5\r\nSSCAN\r\n$5\r\nempty\r\n$1\r\n0\r\n").to_s

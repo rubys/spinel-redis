@@ -83,26 +83,111 @@ class RedisClientCore
     i = 0
     while i < n
       r = read_value
-      kind = p.kinds[i]
-      if r.kind == RespValue::ERROR
-        if !failed
-          failed = true
-          first_error = r.str
-        end
-        out.push(r.str)
-      elsif kind == RedisPipeline::BOOL
-        out.push(r.int == 1)
-      elsif kind == RedisPipeline::INT
-        out.push(r.int)
-      else
-        out.push(r.str)
+      if r.kind == RespValue::ERROR && !failed
+        failed = true
+        first_error = r.str
       end
+      RedisClientCore.push_coerced(out, r, p.kinds[i])
       i = i + 1
     end
     if failed
       raise Redis.command_error(first_error)
     end
     out
+  end
+
+  # redis-rb's multi: the block queues commands as pipelined's does, and
+  # they go out wrapped in MULTI ... EXEC in one write, so the server
+  # runs them as one transaction. Returns EXEC's replies, coerced as the
+  # client's own methods coerce them.
+  #
+  # Errors come back as redis-rb raises them. A command the server
+  # refuses to queue (an unknown command, a wrong arity) aborts the
+  # whole transaction, and that refusal is raised, not EXECABORT. A
+  # command that fails while EXEC runs (WRONGTYPE) doesn't stop the
+  # others, as in Redis; the first such error is raised after every
+  # reply is read. Either way the connection stays in step. An empty
+  # block sends nothing and answers [].
+  def multi
+    p = RedisPipeline.new
+    yield p
+    run_multi(p)
+  end
+
+  def run_multi(p)
+    out = []
+    n = p.argvs.length
+    if n == 0
+      return out
+    end
+    data = Resp.encode_command(["MULTI"])
+    p.argvs.each do |argv|
+      data = data + Resp.encode_command(argv)
+    end
+    data = data + Resp.encode_command(["EXEC"])
+    send_bytes(data)
+    # MULTI's +OK, then one +QUEUED (or a refusal) per command
+    queue_failed = false
+    queue_error = ""
+    i = 0
+    while i <= n
+      r = read_value
+      if r.kind == RespValue::ERROR && !queue_failed
+        queue_failed = true
+        queue_error = r.str
+      end
+      i = i + 1
+    end
+    ex = read_value
+    if queue_failed
+      raise Redis.command_error(queue_error)
+    end
+    if ex.kind == RespValue::ERROR
+      raise Redis.command_error(ex.str)
+    end
+    if ex.kind != RespValue::ARRAY
+      raise Redis::BaseError, "redis: EXEC answered neither an Array nor an error"
+    end
+    failed = false
+    first_error = ""
+    i = 0
+    ex.items.each do |r|
+      if r.kind == RespValue::ERROR && !failed
+        failed = true
+        first_error = r.str
+      end
+      RedisClientCore.push_coerced(out, r, p.kinds[i])
+      i = i + 1
+    end
+    if failed
+      raise Redis.command_error(first_error)
+    end
+    out
+  end
+
+  # One queued command's reply, coerced by its recorded kind and pushed
+  # onto out. Pushing in each branch, rather than returning the value,
+  # keeps the coercion free of a union return type. An error reply is
+  # pushed as its text; the caller raises the first one.
+  def self.push_coerced(out, r, kind)
+    if r.kind == RespValue::ERROR
+      out.push(r.str)
+    elsif kind == RedisPipeline::BOOL
+      out.push(r.int == 1)
+    elsif kind == RedisPipeline::INT
+      out.push(r.int)
+    elsif kind == RedisPipeline::OPT
+      if r.nil_reply?
+        out.push(nil)
+      else
+        out.push(r.str)
+      end
+    elsif kind == RedisPipeline::SET_NX
+      out.push(!r.nil_reply?)
+    else
+      out.push(r.str)
+    end
+    nil
   end
 
   # A blocking command (BRPOP) waits up to its own timeout on the
@@ -125,8 +210,8 @@ class RedisClientCore
     r
   end
 
-  # LPUSH/RPUSH with one value or an Array of them, as redis-rb takes
-  # either.
+  # LPUSH/RPUSH/SADD with one value or an Array of them, as redis-rb
+  # takes either.
   def self.push_argv(cmd, key, value)
     argv = [cmd, key.to_s]
     if value.is_a?(Array)
@@ -135,6 +220,52 @@ class RedisClientCore
       end
     else
       argv.push(value.to_s)
+    end
+    argv
+  end
+
+  # A command over one key or an Array of keys (UNLINK).
+  def self.keys_argv(cmd, keys)
+    argv = [cmd]
+    if keys.is_a?(Array)
+      keys.each do |k|
+        argv.push(k.to_s)
+      end
+    else
+      argv.push(keys.to_s)
+    end
+    argv
+  end
+
+  # SET key value, with redis-rb's ex: (seconds to live) and nx: (only
+  # when the key is missing). ex: 0, the default, sets no TTL.
+  def self.set_argv(key, value, ex, nx)
+    argv = ["SET", key.to_s, value.to_s]
+    if ex > 0
+      argv.push("EX")
+      argv.push(ex.to_s)
+    end
+    if nx
+      argv.push("NX")
+    end
+    argv
+  end
+
+  # HSET key field value, or HSET key with every pair of a Hash, as
+  # redis-rb's hset(key, field, value) and hset(key, hash) both write it.
+  # A field with no value goes out short, for the server to refuse.
+  def self.hset_argv(key, field, value)
+    argv = ["HSET", key.to_s]
+    if field.is_a?(Hash)
+      field.each do |f, v|
+        argv.push(f.to_s)
+        argv.push(v.to_s)
+      end
+    else
+      argv.push(field.to_s)
+      if !value.nil?
+        argv.push(value.to_s)
+      end
     end
     argv
   end
@@ -202,8 +333,14 @@ class RedisClientCore
 
   # -- strings -----------------------------------------------------------
 
-  def set(key, value)
-    str_reply(["SET", key.to_s, value.to_s])
+  # "OK", or with nx: true, whether the key was set (redis-rb answers
+  # true or false there, not "OK" or nil). ex: is seconds to live.
+  def set(key, value, ex: 0, nx: false)
+    r = call_argv(RedisClientCore.set_argv(key, value, ex, nx))
+    if nx
+      return !r.nil_reply?
+    end
+    r.str
   end
 
   def get(key)
@@ -214,8 +351,20 @@ class RedisClientCore
     int_reply(["DEL", key.to_s])
   end
 
+  # One key or an Array of them; how many were removed. The memory is
+  # freed in the background, unlike DEL.
+  def unlink(keys)
+    int_reply(RedisClientCore.keys_argv("UNLINK", keys))
+  end
+
   def exists?(key)
     bool_reply(["EXISTS", key.to_s])
+  end
+
+  # How many of the keys exist, as redis-rb's exists answers it (exists?
+  # is the Boolean form).
+  def exists(key)
+    int_reply(["EXISTS", key.to_s])
   end
 
   def incr(key)
@@ -261,8 +410,10 @@ class RedisClientCore
 
   # -- lists -------------------------------------------------------------
 
+  # One value, or an Array of values pushed in order (so the last ends
+  # up first); the list length.
   def lpush(key, value)
-    int_reply(["LPUSH", key.to_s, value.to_s])
+    int_reply(RedisClientCore.push_argv("LPUSH", key, value))
   end
 
   # One value, or an Array of values pushed in order; the list length.
@@ -313,8 +464,9 @@ class RedisClientCore
 
   # -- sets ----------------------------------------------------------------
 
+  # One member, or an Array of members; how many were new.
   def sadd(key, member)
-    int_reply(["SADD", key.to_s, member.to_s])
+    int_reply(RedisClientCore.push_argv("SADD", key, member))
   end
 
   def srem(key, member)
@@ -333,6 +485,36 @@ class RedisClientCore
     int_reply(["SCARD", key.to_s])
   end
 
+  # Yields every member of the set, walking SSCAN's cursor until it
+  # comes back to 0, as redis-rb's sscan_each does with a block. match:
+  # is SSCAN's MATCH glob and count: its COUNT hint. A member can be
+  # yielded twice if the set changes during the walk, as with SSCAN
+  # itself. The block form only: redis-rb's Enumerator without a block
+  # isn't mirrored (ledger).
+  def sscan_each(key, match: nil, count: nil)
+    cursor = "0"
+    while true
+      argv = ["SSCAN", key.to_s, cursor]
+      if !match.nil?
+        argv.push("MATCH")
+        argv.push(match.to_s)
+      end
+      if !count.nil?
+        argv.push("COUNT")
+        argv.push(count.to_s)
+      end
+      r = call_argv(argv)
+      cursor = r.items[0].str
+      r.items[1].items.each do |m|
+        yield m.str
+      end
+      if cursor == "0"
+        break
+      end
+    end
+    nil
+  end
+
   # Two-key intersection (examples/sets.rb); redis-rb's splat form is
   # narrowed to a typed arity.
   def sinter(key, other)
@@ -341,8 +523,10 @@ class RedisClientCore
 
   # -- hashes ----------------------------------------------------------------
 
-  def hset(key, field, value)
-    int_reply(["HSET", key.to_s, field.to_s, value.to_s])
+  # hset(key, field, value), or hset(key, hash) for several fields in
+  # one command; how many fields were new.
+  def hset(key, field, value = nil)
+    int_reply(RedisClientCore.hset_argv(key, field, value))
   end
 
   def hget(key, field)
